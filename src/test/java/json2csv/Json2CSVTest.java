@@ -15,7 +15,7 @@ public class Json2CSVTest {
 	
 	@Test
 	public void testA_ReadJson() throws IOException {
-		assertEquals(0, j2c.readJson("D:\\ZaloniWork\\parsertoconvertjsontocsvformat\\zdp_entity_complex_2.json"));
+		assertEquals(0, j2c.readJson("D:\\parsertoconvertjsontocsvformat\\zdp_entity_complex_2.json"));
 	}
 	
 	@Test
