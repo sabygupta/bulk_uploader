@@ -1,14 +1,17 @@
 package json2csv;
 
 import java.io.BufferedWriter;
+import java.io.File;
 import java.io.FileWriter;
 import java.io.IOException;
 import java.nio.file.Files;
+import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 import com.fasterxml.jackson.core.JsonParseException;
@@ -16,23 +19,40 @@ import com.fasterxml.jackson.databind.JsonMappingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 
 public class Json2CSV {
 	private Map<String, JsonNode> jsonMap;
-	private String filePath, entityMetaFilename, partitionMetaFilename;
+	private Path jsonPath, csvPath, entityMetaPath, partitionMetaPath;
 	
 	public int readJson(String jsonPath) throws IOException {
-		this.filePath = jsonPath.substring(0, jsonPath.lastIndexOf('\\')+1);
+		this.jsonPath = Paths.get(jsonPath);
 		this.jsonMap = new LinkedHashMap<String, JsonNode>();
 		
-		byte[] jsonData = Files.readAllBytes(Paths.get(jsonPath));
+		byte[] jsonData = Files.readAllBytes(this.jsonPath);
 		ObjectMapper objMapper = new ObjectMapper();
 		JsonNode jsonObj = objMapper.readValue(jsonData, JsonNode.class);
-		for(Iterator<String> it = jsonObj.fieldNames() ; it.hasNext();) {
+		for(Iterator<String> it = jsonObj.fieldNames(); it.hasNext();) {
 			String key = it.next();
 			this.jsonMap.put(key, jsonObj.get(key));
 		}
+		
+		this.setAllPaths(this.jsonPath);
+		
 		return 0;
+	}
+	
+	private void setAllPaths(Path path) {
+		Path currentDir = path.getParent();
+		Path metaDir = Paths.get(currentDir.toString(), "meta");
+		if(!Files.exists(metaDir)) {
+			new File(metaDir.toString()).mkdirs();
+		}
+		String technicalName = this.jsonMap.get("result").get("technicalName").toString().replaceAll("\"", "");
+		this.csvPath = Paths.get(currentDir.toString(), technicalName+"_entity_list.csv");
+		this.entityMetaPath = Paths.get(metaDir.toString(), technicalName+"_entity_fields_list.meta");
+		this.partitionMetaPath = Paths.get(metaDir.toString(), technicalName+"_entity_partition.meta");
+		return;
 	}
 	
 	public int createEntityList() throws IOException {
@@ -49,25 +69,23 @@ public class Json2CSV {
 		JsonNode resultNode = this.jsonMap.get("result");
 		for(String key : keys) {
 			if(key.equals("metaFilename")) {
-				this.entityMetaFilename = this.filePath+resultNode.get("technicalName").toString().replaceAll("\"", "")+"_entity_fields_list.meta";
-				values.add(this.entityMetaFilename);
+				values.add(this.entityMetaPath.toString());
 			} else if(key.equals("updateEntityVersion")) {
 				values.add("\"FALSE\"");
 			}else if(key.equals("partitionFilename")) {
-				this.partitionMetaFilename = this.filePath+resultNode.get("technicalName").toString().replaceAll("\"", "")+"_entity_partition.meta";
-				values.add(this.partitionMetaFilename);
+				values.add(this.partitionMetaPath.toString());
 			}else if(key.equals("tableProperties")) {
 				JsonNode tblProps = resultNode.get(key);
-				Map<String, String> tblPropsMap = new LinkedHashMap<String, String>();
+				List<String> tblPropsList = new ArrayList<String>();
 				for(Iterator<String> it = tblProps.fieldNames() ; it.hasNext();) {
 					String tkey = it.next();
 					if(tkey != "") {
-						tblPropsMap.put(tkey, tblProps.get(tkey).toString().replaceAll("\"", ""));
+						tblPropsList.add(tkey+".delim:"+tblProps.get(tkey).toString().replaceAll("\"", ""));
 					}
 				}
-				if(!tblPropsMap.isEmpty()) {
-					values.add("\""+tblPropsMap.toString().replace("{", "").replace("}", "")+"\"");
-				}else {
+				if(!tblPropsList.isEmpty()) {
+					values.add("\""+String.join(",", tblPropsList)+"\"");
+				} else {
 					values.add("");
 				}
 			} else {
@@ -75,9 +93,7 @@ public class Json2CSV {
 			}
 		}
 		
-		String entityListFile = this.filePath+resultNode.get("technicalName").toString().replaceAll("\"", "")+"_entity_list.csv";
-		
-		FileWriter fileWriter = new FileWriter(entityListFile);
+		FileWriter fileWriter = new FileWriter(this.csvPath.toString());
 		BufferedWriter csvWriter = new BufferedWriter(fileWriter);
 		csvWriter.write(String.join(",", header));
 		csvWriter.newLine();
@@ -93,12 +109,11 @@ public class Json2CSV {
 				"DATA_LENGTH", "DATA_SCALE", "FORMAT", "PRIMARY_KEY", "COLUMN_ID", "SENSITIVITY", "RULE_NAME", "ADDITIONAL_FIELD_PROPERTIES", 
 				"DESCRIPTION"));
 		ArrayList<String> keys = new ArrayList<String>(Arrays.asList("fieldTechnicalName", "fieldBusinessName", "fieldDataType", "complexType", 
-				"fieldDataLength", "dataScale", "dataFormat", "primary", "fieldId", "sensitivityValue", "ruleName", "additionalFieldProperties", 
+				"fieldDataLength", "dataScale", "dataFormat", "primary", "fieldId", "sensitivityValue", "ruleName", "customAttributes", 
 				"description"));
 		ArrayList<ArrayList<String>> values = new ArrayList<ArrayList<String>>();
 		
 		JsonNode fieldsNode = this.jsonMap.get("result").get("fields");
-		assert(fieldsNode instanceof ArrayNode);
 		
 		if(fieldsNode.size() > 0) {
 			for (int i=0; i<fieldsNode.size(); i++) {
@@ -123,7 +138,6 @@ public class Json2CSV {
 						}
 					} else if(key.equals("ruleName")) {
 						JsonNode ruleMappingsNode = fieldNode.get("ruleMappings");
-						assert(ruleMappingsNode instanceof ArrayNode);
 						if(ruleMappingsNode.size() > 0) {
 							ArrayList<String> ruleName = new ArrayList<String>();
 							for(JsonNode node : ruleMappingsNode) {
@@ -133,8 +147,17 @@ public class Json2CSV {
 						}else {
 							value.add("");
 						}
-					} else if(key.equals("additionalFieldProperties")) {
-						value.add("");
+					} else if(key.equals("customAttributes")) {
+						List<String> attList = new ArrayList<String>();
+						JsonNode cusAttNode = fieldNode.get(key);
+						for(JsonNode child : cusAttNode) {
+							this.getAdditionalAttributes(child, null, attList);
+						}
+						if(!attList.isEmpty()) {
+							value.add(String.join("|", attList));
+						} else {
+							value.add("");
+						}
 					} else {
 						value.add(fieldNode.get(key).toString().replaceAll("\"", ""));
 					}
@@ -143,7 +166,7 @@ public class Json2CSV {
 			}
 		}
 		
-		FileWriter fileWriter = new FileWriter(this.entityMetaFilename);
+		FileWriter fileWriter = new FileWriter(this.entityMetaPath.toString());
 		BufferedWriter csvWriter = new BufferedWriter(fileWriter);
 		csvWriter.write(String.join(",", header));
 		csvWriter.newLine();
@@ -153,7 +176,23 @@ public class Json2CSV {
 		}
 		csvWriter.close();
 		fileWriter.close();
+		
 		return 0;
+	}
+	
+	private void getAdditionalAttributes(JsonNode node, String key, List<String> list){
+		if(node instanceof ArrayNode) {
+			for(JsonNode child : node) {
+				this.getAdditionalAttributes(child, null, list);
+			}
+		} else if(node instanceof ObjectNode) {
+			for(Iterator<String> it = node.fieldNames(); it.hasNext();) {
+				String akey = it.next();
+				this.getAdditionalAttributes(node.get(akey), akey, list);
+			}
+		} else {
+			list.add(key+"="+node.toString().replaceAll("\"", ""));
+		}
 	}
 	
 	public int createPartitionMeta() throws IOException {
@@ -162,7 +201,6 @@ public class Json2CSV {
 		ArrayList<String> values = new ArrayList<String>();
 		
 		JsonNode partitionNode = this.jsonMap.get("result").get("partitionFields").get(0);
-		assert(partitionNode instanceof ArrayNode);
 		
 		if(partitionNode != null) {
 			for(String key : keys) {
@@ -170,7 +208,7 @@ public class Json2CSV {
 			}
 		}
 		
-		FileWriter fileWriter = new FileWriter(this.partitionMetaFilename);
+		FileWriter fileWriter = new FileWriter(this.partitionMetaPath.toString());
 		BufferedWriter csvWriter = new BufferedWriter(fileWriter);
 		csvWriter.write(String.join(",", header));
 		csvWriter.newLine();
